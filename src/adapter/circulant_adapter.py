@@ -6,7 +6,7 @@ from transformers import BertLayer, BertModel, BertPreTrainedModel
 from transformers.models.bert.modeling_bert import BertAttention, BertEncoder
 from transformers.modeling_outputs import SequenceClassifierOutput
 
-from utils.utils import ACT2CLS, ClassInstantier
+from utils.utils import ACT2CLS, ClassInstantier, circulant_multiply
 
 ACT2FN = ClassInstantier(ACT2CLS)
 
