@@ -64,7 +64,7 @@ class ToeplitzLayer(nn.Module):
           x = self.activation_fn((toeplitz_multiplication(self.toeplitz_B * self.toeplitz_A, self.toeplitz_B * self.toeplitz_A, \
                                                           self.toeplitz_dropout(x)))) + self.toeplitz_bias
         else :
-          x = self.activation_fn((toeplitz_multiplication(self.toeplitz_A, self.toeplitz_A, self.toeplitz_dropout(x))))
+          x = self.activation_fn((toeplitz_multiplication(self.toeplitz_A, self.toeplitz_A, self.toeplitz_dropout(x)))) + self.toeplitz_bias
         return x
 
 class ToeplitzLayer_general(nn.Module):
