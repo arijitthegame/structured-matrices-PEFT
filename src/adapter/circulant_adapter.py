@@ -59,7 +59,7 @@ class CirculantLayer(nn.Module):
         if self.use_prod :
           x = self.activation_fn((circulant_multiply(self.circulant_B * self.circulant_A, self.circulant_dropout(x)))) + self.circulant_bias
         else :
-          x = self.activation_fn((circulant_multiply(self.circulant_A, self.circulant_dropout(x))))
+          x = self.activation_fn((circulant_multiply(self.circulant_A, self.circulant_dropout(x)))) + self.circulant_bias
         return x
 
 
