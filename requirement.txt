@@ -1,0 +1,6 @@
+torch
+transformers
+evaluate 
+datasets
+peft
+adapter-transformers
