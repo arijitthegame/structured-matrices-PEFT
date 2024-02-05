@@ -1,10 +1,11 @@
-
 import math
 from typing import Optional, List, Dict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from transformers.models.bert.modeling_bert import BertSelfAttention, BertAttention, BertLayer, BertEncoder, BertModel, BertForSequenceClassification
 
+from utils.utils import batch_kron
 
 
 class KroneckerLayer():
@@ -207,5 +208,87 @@ class MergedLinear(nn.Linear, KroneckerLayer):
             if self.r > 0:
                 result += self.kronecker_dropout(x) @ T(self.merge_AB().T) * self.scaling
             return result
+        
+# for a wide useable standpoint, it would be better to inject our method into the OG transformers code instead of creating our custom classes
+
+class KroneckerBertSelfAttention(BertSelfAttention):
+    def __init__(self, config, apply_kron_q, apply_kron_k, apply_kron_v, r, kron_alpha,  kronecker_dropout=0.0,
+                 tie_weights=False, position_embedding_type=None):
+        super().__init__(config)
+        self.apply_kron_q = apply_kron_q
+        self.apply_kron_k = apply_kron_k
+        self.apply_kron_v = apply_kron_v
+        self.r = r
+        self.kron_alpha = kron_alpha
+        self.tie_weights = tie_weights
+        self.kronecker_dropout = kronecker_dropout
+
+        if self.apply_kron_q:
+            self.query = Linear(config.hidden_size, self.all_head_size, self.r, kronecker_alpha=self.kron_alpha, tie_weights=self.tie_weights, kronecker_dropout=self.kronecker_dropout)
+        else:
+            self.query = nn.Linear(config.hidden_size, self.all_head_size)
+
+      # for even more parameter efficiency do not use adaptation to key
+        if self.apply_kron_k:
+            self.key = Linear(config.hidden_size, self.all_head_size, self.r, kronecker_alpha=self.kron_alpha, tie_weights=self.tie_weights, kronecker_dropout=self.kronecker_dropout)
+        else :
+            self.key = nn.Linear(config.hidden_size, self.all_head_size)
+
+        if self.apply_kron_v:
+            self.value = Linear(config.hidden_size, self.all_head_size, self.r, kronecker_alpha=self.kron_alpha, tie_weights=self.tie_weights, kronecker_dropout=self.kronecker_dropout)
+        else:
+            self.value = nn.Linear(config.hidden_size, self.all_head_size)
+
+class KroneckerBertAttention(BertAttention):
+    def __init__(self, config, apply_kron_q, apply_kron_k, apply_kron_v, r, kron_alpha, kronecker_dropout=0.0, tie_weights=False, position_embedding_type=None):
+        super().__init__(config)
+        self.self = KroneckerBertSelfAttention(config, apply_kron_q=apply_kron_q, apply_kron_k=apply_kron_k,
+                                               apply_kron_v=apply_kron_v, r=r, kron_alpha=kron_alpha, kronecker_dropout=kronecker_dropout,
+                                               tie_weights=tie_weights,
+                                               position_embedding_type=position_embedding_type)
+
+
+class KroneckerBertLayer(BertLayer):
+    def __init__(self, config, apply_kron_q, apply_kron_k, apply_kron_v, r, kron_alpha, kronecker_dropout=0.0, tie_weights=False):
+        super().__init__(config)
+        self.attention = KroneckerBertAttention(config, apply_kron_q=apply_kron_q, apply_kron_k=apply_kron_k,
+                                               apply_kron_v=apply_kron_v, r=r, kron_alpha=kron_alpha,
+                                                kronecker_dropout=kronecker_dropout,
+                                                tie_weights=tie_weights,
+                                                )
+
+class KroneckerBertEncoder(BertEncoder):
+    def __init__(self, config, apply_kron_q, apply_kron_k, apply_kron_v, r, kron_alpha, kronecker_dropout=0.0, tie_weights=False):
+        super().__init__(config)
+        self.config = config
+        self.layer = nn.ModuleList([KroneckerBertLayer(config, apply_kron_q=apply_kron_q, apply_kron_k=apply_kron_k,
+                                               apply_kron_v=apply_kron_v, r=r, kron_alpha=kron_alpha,
+                                               kronecker_dropout=kronecker_dropout,tie_weights=tie_weights
+                                                       )
+                                        for _ in range(config.num_hidden_layers)]
+                                   )
+
+
+class KroneckerBertModel(BertModel):
+    def __init__(self, config, apply_kron_q, apply_kron_k, apply_kron_v, r, kron_alpha, tie_weights=False, kronecker_dropout=0.0, add_pooling_layer=True):
+        super().__init__(config)
+        self.config = config
+        self.encoder = KroneckerBertEncoder(config, apply_kron_q=apply_kron_q, apply_kron_k=apply_kron_k,
+                                            apply_kron_v=apply_kron_v, r=r, kron_alpha=kron_alpha,
+                                            kronecker_dropout=kronecker_dropout,
+                                            tie_weights=tie_weights
+                                            )
+
+class KroneckerBertForSequenceClassification(BertForSequenceClassification):
+    def __init__(self, config, apply_kron_q, apply_kron_k, apply_kron_v, r, kron_alpha, kronecker_dropout=0.0, tie_weights=False):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.config = config
+
+        self.bert = KroneckerBertModel(config, apply_kron_q=apply_kron_q, apply_kron_k=apply_kron_k,
+                                       apply_kron_v=apply_kron_v, r=r, kron_alpha=kron_alpha,
+                                       kronecker_dropout=kronecker_dropout,
+                                       tie_weights=tie_weights
+                              )
 
 
