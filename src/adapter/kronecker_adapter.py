@@ -6,9 +6,10 @@ from transformers import BertLayer, BertModel, BertPreTrainedModel
 from transformers.models.bert.modeling_bert import BertAttention, BertEncoder
 from transformers.modeling_outputs import SequenceClassifierOutput
 
-from utils.utils import ACT2CLS, ClassInstantier, batch_kron 
+from utils.utils import ACT2CLS, ClassInstantier, batch_kron
 
 ACT2FN = ClassInstantier(ACT2CLS)
+
 
 class KroneckerLayer(nn.Module):
     def __init__(
@@ -17,16 +18,16 @@ class KroneckerLayer(nn.Module):
         out_features,
         r: list,
         kronecker_dropout: float,
-        tie_weights : bool,
-        activation : str,
+        tie_weights: bool,
+        activation: str,
         **kwargs
     ):
         """
         Simple Kronecker product layer, as a first step we are only implementing pure tensors i.e. a \otimes b
         """
-    # TODO : Add support for general tensors
-    # note In this general case, we allow r to be a list[r_1,r_2] satisfying the required conditions :
-    # A is a matrix of size r_1 \times r_2 then B is such that B \otimes A is of the right size
+        # TODO : Add support for general tensors
+        # note In this general case, we allow r to be a list[r_1,r_2] satisfying the required conditions :
+        # A is a matrix of size r_1 \times r_2 then B is such that B \otimes A is of the right size
         super().__init__()
         self.r = r
         self.tie_weights = tie_weights
@@ -34,7 +35,7 @@ class KroneckerLayer(nn.Module):
         self.activation_fn = ACT2FN[self.activation]
         self.kronecker_bias = nn.Parameter(torch.zeros(out_features))
         # Optional dropout
-        if kronecker_dropout > 0.:
+        if kronecker_dropout > 0.0:
             self.kronecker_dropout = nn.Dropout(p=kronecker_dropout)
         else:
             self.kronecker_dropout = lambda x: x
@@ -42,33 +43,42 @@ class KroneckerLayer(nn.Module):
         if r[0] > 0 or r[-1] > 0:
             assert in_features % r[0] == 0 and out_features % r[-1] == 0
             self.kronecker_A = nn.Parameter(torch.randn((r[0], r[-1])))
-            if self.tie_weights :
+            if self.tie_weights:
                 self.kronecker_B = self.kronecker_A.t()
-            else :
-                self.kronecker_B = nn.Parameter(torch.randn((int(in_features/r[0]), out_features//r[-1])))
+            else:
+                self.kronecker_B = nn.Parameter(
+                    torch.randn((int(in_features / r[0]), out_features // r[-1]))
+                )
 
         self.init_parameters()
 
-
     def init_parameters(self):
 
-            # initialize B the same way as the default for nn.Linear and A to zero
-            # this is different than what is described in the paper but does not affect performance
-        with torch.no_grad() :
-          if self.tie_weights is False :
-              self.kronecker_A.data.normal_(mean=0.0, std=0.02)
-              nn.init.zeros_(self.kronecker_B)
-          else :
-              nn.init.zeros_(self.kronecker_A)
-              nn.init.zeros_(self.kronecker_B) # this will likely not work but I do not of a good initialization
+        # initialize B the same way as the default for nn.Linear and A to zero
+        # this is different than what is described in the paper but does not affect performance
+        with torch.no_grad():
+            if self.tie_weights is False:
+                self.kronecker_A.data.normal_(mean=0.0, std=0.02)
+                nn.init.zeros_(self.kronecker_B)
+            else:
+                nn.init.zeros_(self.kronecker_A)
+                nn.init.zeros_(
+                    self.kronecker_B
+                )  # this will likely not work but I do not of a good initialization
 
     def forward(self, x: torch.Tensor):
-        x = self.activation_fn(self.kronecker_dropout(x) @ (torch.kron(self.kronecker_B, self.kronecker_A))) + self.kronecker_bias
+        x = (
+            self.activation_fn(
+                self.kronecker_dropout(x)
+                @ (torch.kron(self.kronecker_B, self.kronecker_A))
+            )
+            + self.kronecker_bias
+        )
         return x
 
 
 class CustomAdapter(nn.Module):
-  def __init__(
+    def __init__(
         self,
         input_size,
         r,
@@ -76,7 +86,7 @@ class CustomAdapter(nn.Module):
         tie_weights,
         ln_before: bool = False,
         ln_after: bool = False,
-        dropout : float = 0.0,
+        dropout: float = 0.0,
         **kwargs
     ):
         super().__init__()
@@ -97,20 +107,30 @@ class CustomAdapter(nn.Module):
             self.adapter_norm_before = nn.LayerNorm(self.input_size)
             seq_list.append(self.adapter_norm_before)
 
-        seq_list.append(KroneckerLayer(self.input_size, self.input_size, self.r, kronecker_dropout=self.dropout, activation=self.activation, tie_weights=self.tie_weights, **kwargs))
+        seq_list.append(
+            KroneckerLayer(
+                self.input_size,
+                self.input_size,
+                self.r,
+                kronecker_dropout=self.dropout,
+                activation=self.activation,
+                tie_weights=self.tie_weights,
+                **kwargs,
+            )
+        )
         self.adapter_down = nn.Sequential(*seq_list)
 
         # This means that we learn a new output layer norm, which replaces another layer norm learned in the bert layer
-        if self.add_layer_norm_after: #False
+        if self.add_layer_norm_after:  # False
             self.adapter_norm_after = nn.LayerNorm(self.input_size)
 
-
-  def forward(self, x):
+    def forward(self, x):
         rep = self.adapter_down(x)
         output = x + rep
         if self.add_layer_norm_after:
-          output = self.adapter_norm_after(output)
+            output = self.adapter_norm_after(output)
         return output
+
 
 class CustomAdapterBertSelfOutput(nn.Module):
     def __init__(self, config, r, kron_dropout, activation, kron_tie_weights, **kwargs):
@@ -123,15 +143,25 @@ class CustomAdapterBertSelfOutput(nn.Module):
 
         self.dense = nn.Linear(config.hidden_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.mh_adapter = CustomAdapter(input_size=config.hidden_size, r=self.r, dropout=self.kron_dropout, activation=self.activation, tie_weights=self.kron_tie_weights, **kwargs)
+        self.mh_adapter = CustomAdapter(
+            input_size=config.hidden_size,
+            r=self.r,
+            dropout=self.kron_dropout,
+            activation=self.activation,
+            tie_weights=self.kron_tie_weights,
+            **kwargs,
+        )
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, input_tensor: torch.Tensor
+    ) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.mh_adapter(hidden_states)
         hidden_states = self.LayerNorm(hidden_states + input_tensor)
         return hidden_states
+
 
 class CustomAdapterBertOutput(nn.Module):
     def __init__(self, config, r, kron_dropout, activation, kron_tie_weights, **kwargs):
@@ -144,11 +174,19 @@ class CustomAdapterBertOutput(nn.Module):
 
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.output_adapter = CustomAdapter(input_size=config.hidden_size, r=self.r, kron_dropout=self.kron_dropout, activation=self.activation, tie_weights=self.kron_tie_weights, **kwargs,
+        self.output_adapter = CustomAdapter(
+            input_size=config.hidden_size,
+            r=self.r,
+            kron_dropout=self.kron_dropout,
+            activation=self.activation,
+            tie_weights=self.kron_tie_weights,
+            **kwargs,
         )
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, hidden_states: torch.Tensor, input_tensor: torch.Tensor
+    ) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.output_adapter(hidden_states)
@@ -157,9 +195,16 @@ class CustomAdapterBertOutput(nn.Module):
 
 
 class CustomAdapterBertAttention(BertAttention):
-    def __init__(self, config, r, kron_dropout, activation, kron_tie_weights,
-          position_embedding_type=None,
-          **kwargs):
+    def __init__(
+        self,
+        config,
+        r,
+        kron_dropout,
+        activation,
+        kron_tie_weights,
+        position_embedding_type=None,
+        **kwargs
+    ):
         super().__init__(config)
 
         self.config = config
@@ -167,9 +212,14 @@ class CustomAdapterBertAttention(BertAttention):
         self.kron_dropout = kron_dropout
         self.activation = activation
         self.kron_tie_weights = kron_tie_weights
-        self.output = CustomAdapterBertSelfOutput(config=self.config,
-                                                  r=self.r, kron_dropout=self.kron_dropout, activation=self.activation, kron_tie_weights=self.kron_tie_weights, **kwargs,
-                                                  )
+        self.output = CustomAdapterBertSelfOutput(
+            config=self.config,
+            r=self.r,
+            kron_dropout=self.kron_dropout,
+            activation=self.activation,
+            kron_tie_weights=self.kron_tie_weights,
+            **kwargs,
+        )
 
 
 class CustomAdapterBertLayer(BertLayer):
@@ -181,18 +231,27 @@ class CustomAdapterBertLayer(BertLayer):
         self.activation = activation
         self.kron_tie_weights = kron_tie_weights
 
-        self.attention = CustomAdapterBertAttention(config=self.config,
-                                                    r=self.r, kron_dropout=self.kron_dropout, activation=self.activation, kron_tie_weights=self.kron_tie_weights, **kwargs,
-                                                    )
-        self.output = CustomAdapterBertOutput(config=self.config,
-                                              r=self.r, kron_dropout=self.kron_dropout, activation=self.activation, kron_tie_weights=self.kron_tie_weights, **kwargs,
-                                              )
+        self.attention = CustomAdapterBertAttention(
+            config=self.config,
+            r=self.r,
+            kron_dropout=self.kron_dropout,
+            activation=self.activation,
+            kron_tie_weights=self.kron_tie_weights,
+            **kwargs,
+        )
+        self.output = CustomAdapterBertOutput(
+            config=self.config,
+            r=self.r,
+            kron_dropout=self.kron_dropout,
+            activation=self.activation,
+            kron_tie_weights=self.kron_tie_weights,
+            **kwargs,
+        )
 
 
 class CustomAdapterBertEncoder(BertEncoder):
-  # note this custom BERT do not support gradient checkpointing
-    def __init__(self, config, r, kron_dropout, activation, kron_tie_weights,
-          **kwargs):
+    # note this custom BERT do not support gradient checkpointing
+    def __init__(self, config, r, kron_dropout, activation, kron_tie_weights, **kwargs):
         super().__init__(config)
         self.config = config
         self.r = r
@@ -200,9 +259,20 @@ class CustomAdapterBertEncoder(BertEncoder):
         self.activation = activation
         self.kron_tie_weights = kron_tie_weights
 
-        self.layer = nn.ModuleList([CustomAdapterBertLayer(config=self.config,
-                                                          r=self.r, kron_dropout=self.kron_dropout, activation=self.activation, kron_tie_weights=self.kron_tie_weights,
-                                                          **kwargs, ) for _ in range(config.num_hidden_layers)])
+        self.layer = nn.ModuleList(
+            [
+                CustomAdapterBertLayer(
+                    config=self.config,
+                    r=self.r,
+                    kron_dropout=self.kron_dropout,
+                    activation=self.activation,
+                    kron_tie_weights=self.kron_tie_weights,
+                    **kwargs,
+                )
+                for _ in range(config.num_hidden_layers)
+            ]
+        )
+
 
 class CustomAdapterBertModel(BertModel):
     def __init__(self, config, r, kron_dropout, activation, kron_tie_weights, **kwargs):
@@ -214,14 +284,18 @@ class CustomAdapterBertModel(BertModel):
         self.activation = activation
         self.kron_tie_weights = kron_tie_weights
 
-        self.encoder = CustomAdapterBertEncoder(config=self.config,
-                                                r=self.r, kron_dropout=self.kron_dropout, activation=self.activation, kron_tie_weights=self.kron_tie_weights,
-                                                **kwargs )
+        self.encoder = CustomAdapterBertEncoder(
+            config=self.config,
+            r=self.r,
+            kron_dropout=self.kron_dropout,
+            activation=self.activation,
+            kron_tie_weights=self.kron_tie_weights,
+            **kwargs,
+        )
 
 
 class CustomBertForSequenceClassification(nn.Module):
-    def __init__(self, config, r, kron_dropout, activation, kron_tie_weights,
-                 **kwargs):
+    def __init__(self, config, r, kron_dropout, activation, kron_tie_weights, **kwargs):
         super().__init__()
 
         self.config = config
@@ -230,12 +304,19 @@ class CustomBertForSequenceClassification(nn.Module):
         self.activation = activation
         self.kron_tie_weights = kron_tie_weights
 
-
-        self.bert = CustomAdapterBertModel.from_pretrained('bert-base-uncased', config=self.config,
-                                                  r=self.r, kron_dropout=self.kron_dropout, activation=self.activation, kron_tie_weights=self.kron_tie_weights,
-                                                  **kwargs, )
+        self.bert = CustomAdapterBertModel.from_pretrained(
+            "bert-base-uncased",
+            config=self.config,
+            r=self.r,
+            kron_dropout=self.kron_dropout,
+            activation=self.activation,
+            kron_tie_weights=self.kron_tie_weights,
+            **kwargs,
+        )
         classifier_dropout = (
-            config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
+            config.classifier_dropout
+            if config.classifier_dropout is not None
+            else config.hidden_dropout_prob
         )
         self.dropout = nn.Dropout(classifier_dropout)
         self.classifier = nn.Linear(config.hidden_size, config.num_labels)
@@ -246,16 +327,16 @@ class CustomBertForSequenceClassification(nn.Module):
 
     def forward(
         self,
-        input_ids = None,
-        attention_mask = None,
-        token_type_ids = None,
-        position_ids = None,
-        head_mask = None,
-        inputs_embeds = None,
-        labels = None,
-        output_attentions = None,
-        output_hidden_states = None,
-        return_dict = None,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
     ):
         r"""
         labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
@@ -263,7 +344,9 @@ class CustomBertForSequenceClassification(nn.Module):
             config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
             `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
         """
-        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+        return_dict = (
+            return_dict if return_dict is not None else self.config.use_return_dict
+        )
 
         outputs = self.bert(
             input_ids,
@@ -287,7 +370,9 @@ class CustomBertForSequenceClassification(nn.Module):
             if self.config.problem_type is None:
                 if self.num_labels == 1:
                     self.config.problem_type = "regression"
-                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                elif self.num_labels > 1 and (
+                    labels.dtype == torch.long or labels.dtype == torch.int
+                ):
                     self.config.problem_type = "single_label_classification"
                 else:
                     self.config.problem_type = "multi_label_classification"
@@ -314,7 +399,3 @@ class CustomBertForSequenceClassification(nn.Module):
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )
-
-
-
-
