@@ -1,4 +1,4 @@
-# This is a MWE on how to use the LDRM-PEFT models. One can use the HF trainers or this boiler plate code. Simply import the correct model. 
+# This is a MWE on how to use the LDRM-PEFT models. One can use the HF trainers or this boiler plate code. Simply import the correct model.
 
 import argparse
 import os
@@ -14,7 +14,12 @@ from torch.utils.data import DataLoader
 
 import evaluate
 from datasets import load_dataset
-from transformers import AutoTokenizer, get_linear_schedule_with_warmup, AutoConfig, PretrainedConfig
+from transformers import (
+    AutoTokenizer,
+    get_linear_schedule_with_warmup,
+    AutoConfig,
+    PretrainedConfig,
+)
 from tqdm import tqdm
 
 from adapter.circulant_adapter import CustomBertForSequenceClassification
@@ -38,29 +43,23 @@ task_to_keys = {
 }
 
 
-parser = argparse.ArgumentParser(
-    description="Circulant Finetuning on GLUE on 1 GPU"
-)
+parser = argparse.ArgumentParser(description="Circulant Finetuning on GLUE on 1 GPU")
 parser.add_argument("--seed", default=3047, type=int)
 parser.add_argument("--batch_size", default=64, type=int)
 parser.add_argument("--model_name_or_path", default="bert-base-uncased", type=str)
-parser.add_argument("--task_name", default='rte', type=str) 
-parser.add_argument("--device", default='cuda')
+parser.add_argument("--task_name", default="rte", type=str)
+parser.add_argument("--device", default="cuda")
 parser.add_argument("--num_epochs", default=80, type=int)
 parser.add_argument("--lr", default=2e-3, type=float)
+parser.add_argument("--max_length", type=int, default=128)
 parser.add_argument(
-        "--max_length",
-        type=int,
-        default=128
-    )
+    "--pad_to_max_length",
+    action="store_true",
+    help="If passed, pad all samples to `max_length`. Otherwise, dynamic padding is used.",
+)
 parser.add_argument(
-        "--pad_to_max_length",
-        action="store_true",
-        help="If passed, pad all samples to `max_length`. Otherwise, dynamic padding is used.",
-    )
-parser.add_argument("--weight_decay", type=float, default=0.25, help="Weight decay to use.")
-
-
+    "--weight_decay", type=float, default=0.25, help="Weight decay to use."
+)
 
 
 args = parser.parse_args(args=[])
@@ -78,8 +77,11 @@ if args.task_name is not None:
     else:
         num_labels = 1
 else:
-        # some defaults et here
-    is_regression = raw_datasets["train"].features["label"].dtype in ["float32", "float64"]
+    # some defaults et here
+    is_regression = raw_datasets["train"].features["label"].dtype in [
+        "float32",
+        "float64",
+    ]
     if is_regression:
         num_labels = 1
     else:
@@ -90,20 +92,26 @@ else:
         num_labels = len(label_list)
 print(f"model used is {args.model_name_or_path}")
 
-config = AutoConfig.from_pretrained(args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name)
-tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, padding_side='right')
-model = CustomBertForSequenceClassification(config, circ_dropout=.15, activation="gelu", use_prod=True)
+config = AutoConfig.from_pretrained(
+    args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name
+)
+tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, padding_side="right")
+model = CustomBertForSequenceClassification(
+    config, circ_dropout=0.15, activation="gelu", use_prod=True
+)
 
 if getattr(tokenizer, "pad_token_id") is None:
     tokenizer.pad_token_id = tokenizer.eos_token_id
 
 
- # Preprocessing the datasets
+# Preprocessing the datasets
 if args.task_name is not None:
     sentence1_key, sentence2_key = task_to_keys[args.task_name]
 else:
-      # Again, we try to have some nice defaults but don't hesitate to tweak to your use case.
-    non_label_column_names = [name for name in raw_datasets["train"].column_names if name != "label"]
+    # Again, we try to have some nice defaults but don't hesitate to tweak to your use case.
+    non_label_column_names = [
+        name for name in raw_datasets["train"].column_names if name != "label"
+    ]
     if "sentence1" in non_label_column_names and "sentence2" in non_label_column_names:
         sentence1_key, sentence2_key = "sentence1", "sentence2"
     else:
@@ -112,27 +120,27 @@ else:
         else:
             sentence1_key, sentence2_key = non_label_column_names[0], None
 
-  # Some models have set the order of the labels to use, so let's make sure we do use it.
+# Some models have set the order of the labels to use, so let's make sure we do use it.
 label_to_id = None
 if (
-      model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id
-      and args.task_name is not None
-      and not is_regression
-  ):
-      # Some have all caps in their config, some don't.
+    model.config.label2id != PretrainedConfig(num_labels=num_labels).label2id
+    and args.task_name is not None
+    and not is_regression
+):
+    # Some have all caps in their config, some don't.
     label_name_to_id = {k.lower(): v for k, v in model.config.label2id.items()}
     if sorted(label_name_to_id.keys()) == sorted(label_list):
         logger.info(
-              f"The configuration of the model provided the following label correspondence: {label_name_to_id}. "
-              "Using it!"
-          )
+            f"The configuration of the model provided the following label correspondence: {label_name_to_id}. "
+            "Using it!"
+        )
         label_to_id = {i: label_name_to_id[label_list[i]] for i in range(num_labels)}
     else:
         logger.warning(
-              "Your model seems to have been trained with labels, but they don't match the dataset: ",
-              f"model labels: {sorted(label_name_to_id.keys())}, dataset labels: {sorted(label_list)}."
-              "\nIgnoring the model labels as a result.",
-          )
+            "Your model seems to have been trained with labels, but they don't match the dataset: ",
+            f"model labels: {sorted(label_name_to_id.keys())}, dataset labels: {sorted(label_list)}."
+            "\nIgnoring the model labels as a result.",
+        )
 elif args.task_name is None and not is_regression:
     label_to_id = {v: i for i, v in enumerate(label_list)}
 
@@ -146,79 +154,101 @@ elif args.task_name is not None and not is_regression:
 padding = "max_length" if args.pad_to_max_length else False
 
 mark_only_circulant_as_trainable(model)
-for n,p in model.named_parameters():
-  if 'classifier' in n: # update classifier params as well
-    p.requires_grad = True
+for n, p in model.named_parameters():
+    if "classifier" in n:  # update classifier params as well
+        p.requires_grad = True
+
 
 def preprocess_function(examples):
-        # Tokenize the texts
+    # Tokenize the texts
     texts = (
-        (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
+        (examples[sentence1_key],)
+        if sentence2_key is None
+        else (examples[sentence1_key], examples[sentence2_key])
     )
-    result = tokenizer(*texts, padding=padding, max_length=args.max_length, truncation=True)
+    result = tokenizer(
+        *texts, padding=padding, max_length=args.max_length, truncation=True
+    )
 
     if "label" in examples:
         if label_to_id is not None:
-                # Map labels to IDs (not necessary for GLUE tasks)
+            # Map labels to IDs (not necessary for GLUE tasks)
             result["labels"] = [label_to_id[l] for l in examples["label"]]
         else:
-                # In all cases, rename the column to labels because the model will expect that.
+            # In all cases, rename the column to labels because the model will expect that.
             result["labels"] = examples["label"]
     return result
 
 
 processed_datasets = raw_datasets.map(
-            preprocess_function,
-            batched=True,
-            remove_columns=raw_datasets["train"].column_names,
-            desc="Running tokenizer on dataset",
-        )
+    preprocess_function,
+    batched=True,
+    remove_columns=raw_datasets["train"].column_names,
+    desc="Running tokenizer on dataset",
+)
 
 train_dataset = processed_datasets["train"]
-eval_dataset = processed_datasets["validation_matched" if args.task_name == "mnli" else "validation"]
+eval_dataset = processed_datasets[
+    "validation_matched" if args.task_name == "mnli" else "validation"
+]
 
 if args.task_name is not None:
     metric = evaluate.load("glue", args.task_name)
 else:
     metric = evaluate.load("accuracy")
 
+
 def collate_fn(examples):
     return tokenizer.pad(examples, padding="longest", return_tensors="pt")
 
 
-train_dataloader = DataLoader(train_dataset, shuffle=True, collate_fn=collate_fn, batch_size=args.batch_size)
+train_dataloader = DataLoader(
+    train_dataset, shuffle=True, collate_fn=collate_fn, batch_size=args.batch_size
+)
 
 
 eval_dataloader = DataLoader(
     eval_dataset, shuffle=False, collate_fn=collate_fn, batch_size=args.batch_size
-) 
-if args.task_name == "mnli":
-        # Final evaluation on mismatched validation set
-    test_dataset = processed_datasets["validation_mismatched"]
-else :
-    test_dataloader = DataLoader(
-        processed_datasets["test"], shuffle=False, collate_fn=collate_fn, batch_size=args.batch_size
 )
+if args.task_name == "mnli":
+    # Final evaluation on mismatched validation set
+    test_dataset = processed_datasets["validation_mismatched"]
+else:
+    test_dataloader = DataLoader(
+        processed_datasets["test"],
+        shuffle=False,
+        collate_fn=collate_fn,
+        batch_size=args.batch_size,
+    )
 
 
 no_decay = ["bias", "LayerNorm.weight"]
 optimizer_grouped_parameters = [
-        {
-            "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
-            "weight_decay": args.weight_decay,
-        },
-        {
-            "params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
-            "weight_decay": 0.0,
-        },
-    ]
-optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr, weight_decay=args.weight_decay)
+    {
+        "params": [
+            p
+            for n, p in model.named_parameters()
+            if not any(nd in n for nd in no_decay)
+        ],
+        "weight_decay": args.weight_decay,
+    },
+    {
+        "params": [
+            p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)
+        ],
+        "weight_decay": 0.0,
+    },
+]
+optimizer = AdamW(
+    optimizer_grouped_parameters, lr=args.lr, weight_decay=args.weight_decay
+)
 
 
 # Instantiate scheduler
 lr_scheduler = get_linear_schedule_with_warmup(
     optimizer=optimizer,
-    num_warmup_steps=0.06 * (len(train_dataloader) * args.num_epochs), # kinda hardcoded. 
+    num_warmup_steps=0.06
+    * (len(train_dataloader) * args.num_epochs),  # kinda hardcoded.
     num_training_steps=(len(train_dataloader) * args.num_epochs),
 )
 
@@ -251,7 +281,11 @@ for epoch in range(epochs, args.num_epochs):
         batch.to(args.device)
         with torch.no_grad():
             outputs = model(**batch)
-        predictions = outputs.logits.argmax(dim=-1) if not is_regression else outputs.logits.squeeze()
+        predictions = (
+            outputs.logits.argmax(dim=-1)
+            if not is_regression
+            else outputs.logits.squeeze()
+        )
         predictions, references = predictions, batch["labels"]
         metric.add_batch(
             predictions=predictions,
@@ -261,6 +295,3 @@ for epoch in range(epochs, args.num_epochs):
     eval_metric = metric.compute()
     print(f"epoch {epoch}:", eval_metric)
     d[epoch] = eval_metric
-
-
-
