@@ -5,6 +5,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from lora.circulant_lora import CirculantLayer
+from lora.kronecker_lora import KroneckerLayer
+from lora.toeplitz_lora import ToeplitzLayer
+
 ACT2CLS = {
     "gelu": nn.GELU,
     "linear": nn.Identity,
@@ -275,3 +279,43 @@ def circulant(tensor, dim=0):
         dim=dim,
     )
     return tmp.unfold(dim, S, 1).flip((-1,))
+
+
+def skew_mult(r, v, root_vec):
+    """
+    Computes the fast matrix vector multiplication by a skew circulant matrix.
+    r = vec of size hidden dim (1st row)
+    v = N-d tensor
+    root_vec := [1, \eta, ...,\eta^k], where \eta is the primitive complex root of x^n - f
+    """
+
+    n = v.size(-1)
+    r_skew = r * root_vec
+    r_fft = torch.fft.fft(r_skew)
+    v_skew = v * root_vec
+    v_fft = torch.fft.fft(v_skew)
+    return (torch.conj(root_vec) * torch.fft.ifft(r_fft * v_fft)).real
+
+
+def skew_circulant_matrix(row):
+    """Constructs a skew circulant matrix from first row"""
+    n = row.numel()
+    skew_circulant_matrix = row.unsqueeze(0)
+
+    for i in range(1, n):
+        rolled = torch.roll(row, shifts=i, dims=0)
+        rolled[:i] *= -1
+        skew_circulant_matrix = torch.cat(
+            (skew_circulant_matrix, rolled.unsqueeze(0)), dim=0
+        )
+
+    return skew_circulant_matrix
+
+
+def compute_root(n):
+    """Computes root of x^n + 1"""
+    coeff = np.zeros(n + 1)
+    coeff[0] = 1
+    coeff[-1] = 1
+    e = np.roots(coeff)[0]
+    return e
